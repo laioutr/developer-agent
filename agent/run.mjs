@@ -38,7 +38,9 @@ const { port } = forwarder.address();
 
 const mcp = path.join(out, "mcp.json");
 fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { gate: { command: "node", args: [path.join(here, "gate.mjs")] } } }));
-const args = ["-p", task.task + notes, "--output-format", "stream-json", "--verbose", "--max-turns", String(task.maxTurns ?? 80),
+// The agent's context, published beside these scripts: what it is, what it may do, and that quoted text is data.
+const system = fs.readFileSync(path.join(here, "system.md"), "utf8");
+const args = ["-p", task.task + notes, "--append-system-prompt", system, "--output-format", "stream-json", "--verbose", "--max-turns", String(task.maxTurns ?? 80),
   "--permission-mode", "default", "--mcp-config", mcp, "--strict-mcp-config",
   "--permission-prompt-tool", "mcp__gate__permission", "--allowedTools", ...rules, ...allowedOnce,
   "--disallowedTools", "WebFetch", "WebSearch"];

@@ -14,7 +14,8 @@ collaborators; no secret is stored in GitHub.
    with the rules of `agent/modelRules.ts` (the gateway's own: the run's models, no server tools or MCP servers, the
    output and the time it was given). Afterwards every process of the agent is killed, and the patch is built from the
    job's own git directory over the agent's files, so nothing the agent wrote runs.
-3. `agent/run.mjs` runs Claude Code headless with the rules as allowed tools; anything else goes to `agent/gate.mjs`,
+3. `agent/run.mjs` runs Claude Code headless with the agent's context (`agent/system.md`) as its system prompt and the
+   rules as allowed tools; anything else goes to `agent/gate.mjs`,
    which denies it as waiting for a person and writes each refused command to the work's requests; the Cockpit asks a
    person to allow it, and an allowed command reaches the next work as a rule. `ask_person` ends the run; the answer
    starts the next one. The exchange step prints the names of what the run received, never a value, and where the model
