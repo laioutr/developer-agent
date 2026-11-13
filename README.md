@@ -21,6 +21,8 @@ collaborators; no secret is stored in GitHub.
    as an artifact.
 
 A new version is tagged (`v1` moves) and its sha approved at the gateway (`AGENT_WORKFLOW_SHAS`) before runs may use it.
+`v1` is a lightweight tag: GitHub names an annotated tag's own object in the run's `job_workflow_sha`, not the commit,
+so the gateway would refuse it.
 
 Called from each project's repository by its caller file, `.github/workflows/laioutr-developer.yml`, which the
 repository template carries. Everything here and everything a run prints is public to that repository's
@@ -43,3 +45,5 @@ collaborators; no secret is stored in GitHub.
    as an artifact.
 
 A new version is tagged (`v1` moves) and its sha approved at the gateway (`AGENT_WORKFLOW_SHAS`) before runs may use it.
+`v1` is a lightweight tag: GitHub names an annotated tag's own object in the run's `job_workflow_sha`, not the commit,
+so the gateway would refuse it.

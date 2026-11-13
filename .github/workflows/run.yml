@@ -76,6 +76,7 @@ jobs:
       # directory over its files.
       - name: Run the agent
         run: |
+          # GitHub runs this with bash -e: every step of the set-up stops the job on its first failure.
           set -uo pipefail
           umask 077
           run="$RUNNER_TEMP/run.json"
@@ -83,7 +84,7 @@ jobs:
           # bubblewrap needs a user namespace; only for the agent's start, and the sandbox may make no further one.
           userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2> /dev/null || true)
           [ -n "$userns" ] && sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0
-          ulimit -Hc 0
+          ulimit -c 0
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin agentmodel
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin agent
           box=$(sudo mktemp -d /srv/agent.XXXXXX) && sudo chmod 755 "$box"
@@ -112,6 +113,8 @@ jobs:
           for file in passwd group nsswitch.conf ld.so.cache localtime alternatives; do
             [ -e "/etc/$file" ] && etc="$etc --ro-bind /etc/$file /etc/$file"
           done
+          # From here on every outcome is handled below, the agent's failing included, so the change is still handed over.
+          set +e
           # shellcheck disable=SC2086
           printf '%s' "$task" | sudo -u agent bash -c 'ulimit -u 2048 -f 2097152; exec "$@"' sandbox bwrap \
             --unshare-all --unshare-user --disable-userns --die-with-parent --new-session \
