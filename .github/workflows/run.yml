@@ -16,7 +16,7 @@ permissions:
   id-token: write
 env:
   # Fixed here, never an input or a variable: a token sent anywhere else could be replayed.
-  GATEWAY: https://agent-gateway.laioutr.workers.dev
+  GATEWAY: https://agent-gateway.laioutr.cloud
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -38,10 +38,12 @@ jobs:
           set -euo pipefail
           umask 077
           [[ "$TASK_ID" =~ ^[a-z0-9]{1,40}$ && "$NONCE" =~ ^[A-Za-z0-9_-]{16,128}$ ]] || { echo "Not started by Laioutr's Cockpit."; exit 1; }
-          oidc=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$GATEWAY" | jq -r .value)
+          # Tokens go to curl on its standard input, never on its command line, where other processes could read them.
+          oidc=$(printf 'Authorization: Bearer %s' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" | curl -sf -H @- "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$GATEWAY" | jq -r .value)
           echo "::add-mask::$oidc"
-          curl -sf -X POST "$GATEWAY/exchange" -H "Authorization: Bearer $oidc" -H "content-type: application/json" \
+          printf 'Authorization: Bearer %s' "$oidc" | curl -sf -X POST "$GATEWAY/exchange" -H @- -H "content-type: application/json" \
             -d "$(jq -n --arg task "$TASK_ID" --arg nonce "$NONCE" '{taskId: $task, nonce: $nonce}')" > "$RUNNER_TEMP/run.json"
+          unset oidc
           for key in repositoryToken modelToken runToken; do echo "::add-mask::$(jq -r ".$key // empty" "$RUNNER_TEMP/run.json")"; done
           {
             echo "REPOSITORY_TOKEN=$(jq -r .repositoryToken "$RUNNER_TEMP/run.json")"
@@ -97,10 +99,8 @@ jobs:
 
           # The proxy gets the credential on a pipe; the keys' file is gone before the agent starts.
           proxy_config=$(jq --arg socket "$box/model/model.sock" '{
-            socket: $socket,
-            auth: (if .modelAuth == "subscription" then "seat" else "gateway" end),
-            upstream: (if .modelAuth == "subscription" then "https://api.anthropic.com" else .modelBaseUrl end),
-            token: .modelToken, models, maxOutputTokens, deadline, maxCalls: ((.maxTurns // 80) * 5) }' "$run")
+            socket: $socket, upstream: .modelBaseUrl, token: .modelToken, models, maxOutputTokens, deadline,
+            maxCalls: ((.maxTurns // 80) * 5) }' "$run")
           task=$(jq '{task, rules, models, notes, allowedOnce, maxTurns}' "$run")
           rm -f "$run"
           (printf '%s' "$proxy_config" | sudo -u agentmodel "$node_dir/bin/node" "$box/scripts/proxy.mjs" &)
@@ -147,3 +147,10 @@ jobs:
           sudo rm -rf "$box" "$GITHUB_WORKSPACE/work" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch"
           echo "The agent ended ($agent_status)."
           exit "$report_status"
+      # However the job ends — cancelled, timed out, failed — nothing of the run stays on the machine.
+      - name: Clean up
+        if: always()
+        run: |
+          sudo pkill -KILL -u agent 2> /dev/null || true
+          sudo pkill -KILL -u agentmodel 2> /dev/null || true
+          sudo rm -rf "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch" /srv/agent.* "$GITHUB_WORKSPACE/work"

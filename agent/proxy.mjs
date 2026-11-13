@@ -1,18 +1,15 @@
-// The run's only way to the model, run in the job as a user of its own: it holds the model credential — Laioutr's seat
-// token, or this run's token for the Cockpit's gateway — and the agent, sandboxed without a network, reaches the model
-// only through it. It passes on what the rules allow (`modelRules.ts`, the gateway's own) and nothing else, so no request
+// The run's only way to the model, run in the job as a user of its own: it holds this run's token for Laioutr's gateway,
+// and the agent, sandboxed without a network, reaches the model only through it. Laioutr's key and seat stay in the
+// gateway. It passes on what the rules allow (`modelRules.ts`, the gateway's own) and nothing else, so no request
 // the agent makes can reach a host through the provider, and the credential never enters the agent's sandbox.
 //
-// Configuration arrives once on standard input: { socket, upstream, auth: "seat" | "gateway", token, models,
-// maxOutputTokens, deadline, maxCalls }. It listens on a Unix socket the sandbox is given.
+// Configuration arrives once on standard input: { socket, upstream, token, models, maxOutputTokens, deadline,
+// maxCalls }. It listens on a Unix socket the sandbox is given.
 import fs from "node:fs";
 import http from "node:http";
 import { Readable } from "node:stream";
 
 import { ALLOWED_PATHS, ALLOWED_QUERIES, betasOf, maxTokensOf, PASSED_HEADER, refusalOf } from "./modelRules.ts";
-
-/** The beta Anthropic's API asks of a call made with a subscription's token. */
-const SEAT_BETA = "oauth-2025-04-20";
 
 /** The most a request body may be: far above any conversation Claude Code sends. */
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -50,7 +47,6 @@ export const upstreamHeadersOf = (incoming, config) => {
   for (const [name, value] of Object.entries(incoming)) if (PASSED_HEADER.test(name) && typeof value === "string") headers[name] = value;
   headers.authorization = `Bearer ${config.token}`;
   const betas = betasOf(incoming["anthropic-beta"]);
-  if (config.auth === "seat" && !betas.includes(SEAT_BETA)) betas.push(SEAT_BETA);
   if (betas.length) headers["anthropic-beta"] = betas.join(",");
   return headers;
 };
