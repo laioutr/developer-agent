@@ -43,8 +43,9 @@ jobs:
           echo "::add-mask::$oidc"
           status=$(printf 'Authorization: Bearer %s' "$oidc" | curl -s -o "$RUNNER_TEMP/run.json" -w '%{http_code}' -X POST "$GATEWAY/exchange" \
             -H @- -H "content-type: application/json" \
-            -d "$(jq -n --arg task "$TASK_ID" --arg nonce "$NONCE" '{taskId: $task, nonce: $nonce}')")
+            -d "$(jq -n --arg task "$TASK_ID" --arg nonce "$NONCE" '{taskId: $task, nonce: $nonce}')") || status=000
           unset oidc
+          [[ "$status" != 000 ]] || { echo "The gateway could not be reached."; exit 1; }
           [[ "$status" == 200 ]] || { echo "The gateway refused this run's keys (HTTP $status)."; exit 1; }
           for key in repositoryToken modelToken runToken; do echo "::add-mask::$(jq -r ".$key // empty" "$RUNNER_TEMP/run.json")"; done
           {
