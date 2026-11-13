@@ -41,9 +41,11 @@ jobs:
           # Tokens go to curl on its standard input, never on its command line, where other processes could read them.
           oidc=$(printf 'Authorization: Bearer %s' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" | curl -sf -H @- "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$GATEWAY" | jq -r .value)
           echo "::add-mask::$oidc"
-          printf 'Authorization: Bearer %s' "$oidc" | curl -sf -X POST "$GATEWAY/exchange" -H @- -H "content-type: application/json" \
-            -d "$(jq -n --arg task "$TASK_ID" --arg nonce "$NONCE" '{taskId: $task, nonce: $nonce}')" > "$RUNNER_TEMP/run.json"
+          status=$(printf 'Authorization: Bearer %s' "$oidc" | curl -s -o "$RUNNER_TEMP/run.json" -w '%{http_code}' -X POST "$GATEWAY/exchange" \
+            -H @- -H "content-type: application/json" \
+            -d "$(jq -n --arg task "$TASK_ID" --arg nonce "$NONCE" '{taskId: $task, nonce: $nonce}')")
           unset oidc
+          [[ "$status" == 200 ]] || { echo "The gateway refused this run's keys (HTTP $status)."; exit 1; }
           for key in repositoryToken modelToken runToken; do echo "::add-mask::$(jq -r ".$key // empty" "$RUNNER_TEMP/run.json")"; done
           {
             echo "REPOSITORY_TOKEN=$(jq -r .repositoryToken "$RUNNER_TEMP/run.json")"
@@ -54,7 +56,9 @@ jobs:
             echo "ACTIONS_ID_TOKEN_REQUEST_URL="
             echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN="
           } >> "$GITHUB_ENV"
-          echo "Keys received for this run."
+          # Names only, never a value: anyone reading the log sees that no model credential reached the job.
+          echo "Received for this run: $(jq -r 'keys_unsorted | join(", ")' "$RUNNER_TEMP/run.json")"
+          echo "The model is reached through $(jq -r .modelBaseUrl "$RUNNER_TEMP/run.json") with this run's own token."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository }}

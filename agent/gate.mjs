@@ -1,5 +1,6 @@
 // Minimal MCP stdio server: one tool that answers Claude Code's permission prompts and one ask_person tool.
-// Logs every request to perm.log so the round trip can be inspected.
+// Every request is written to agent-requests.jsonl with the gate's decision, so the Cockpit asks a person for each
+// command it refused.
 import fs from "node:fs";
 import readline from "node:readline";
 const log = (o) => fs.appendFileSync(`${process.env.RUNNER_TEMP || "/tmp"  }/agent-requests.jsonl`, `${JSON.stringify(o)  }\n`);
@@ -17,15 +18,24 @@ const answerOf = (m) => {
       ],
     };
   if (m.method === "tools/call") {
-    log({ tool: m.params.name, args: m.params.arguments });
     if (m.params.name === "permission") {
       const { tool_name, input } = m.params.arguments;
       const cmd = input && input.command ? String(input.command) : "";
       // A command the rules let run alone: one of these, with no second command, pipe, redirect or substitution after it.
       const allow = tool_name !== "Bash" || (/^(node|npm test|cat|ls|git (status|diff))\b/.test(cmd) && !/[;&|<>`$\n\r]/.test(cmd));
-      const answer = allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "Outside the project's rules: waits for a person. Call ask_person with what you need and why, then stop." };
+      log({ tool: m.params.name, args: m.params.arguments, denied: !allow });
+      const answer = allow ?
+          { behavior: "allow", updatedInput: input }
+        : {
+            behavior: "deny",
+            message:
+              "Outside the project's rules. A person is asked to allow this exact command now; do not ask about it yourself " +
+              "and do not run it another way. Run every command alone, never chained with another. Finish what you can " +
+              "without it, then stop: the task continues once they answer.",
+          };
       return { content: [{ type: "text", text: JSON.stringify(answer) }] };
     }
+    log({ tool: m.params.name, args: m.params.arguments });
     return { content: [{ type: "text", text: "Recorded. The run ends now; the answer starts the next run." }] };
   }
   return m.id === undefined ? null : {};
