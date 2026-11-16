@@ -118,6 +118,10 @@ jobs:
           for file in passwd group nsswitch.conf ld.so.cache localtime alternatives; do
             [ -e "/etc/$file" ] && etc="$etc --ro-bind /etc/$file /etc/$file"
           done
+          # What the agent does goes to the Cockpit while it works; the reporter reads the events file and holds the token.
+          # The token goes through the environment, never on a command line another process could list.
+          sudo --preserve-env=RUN_TOKEN "$node_dir/bin/node" "$GITHUB_WORKSPACE/agent/agent/progress.mjs" "$GATEWAY" "$box/out/agent-events.jsonl" &
+          progress_pid=$!
           # From here on every outcome is handled below, the agent's failing included, so the change is still handed over.
           set +e
           # shellcheck disable=SC2086
@@ -131,6 +135,7 @@ jobs:
             --setenv AGENT_OUT /out --setenv MODEL_SOCKET /model/model.sock \
             --chdir /work node /agent/run.mjs
           agent_status=$?
+          sudo kill "$progress_pid" 2> /dev/null
           sudo pkill -KILL -u agent; sudo pkill -KILL -u agentmodel
           [ -n "$userns" ] && sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns="$userns"
 
@@ -161,4 +166,5 @@ jobs:
         run: |
           sudo pkill -KILL -u agent 2> /dev/null || true
           sudo pkill -KILL -u agentmodel 2> /dev/null || true
+          sudo pkill -f agent/agent/progress.mjs 2> /dev/null || true
           sudo rm -rf "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch" /srv/agent.* "$GITHUB_WORKSPACE/work"
