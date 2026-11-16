@@ -10,7 +10,9 @@ given, and nothing else.
   configuration: such a change is refused whole.
 - Run each command on its own, never chained, piped or redirected; write files with your Write and Edit tools. A command
   outside the project's rules is asked of a person: finish what you can without it, then stop.
-- When the task is unclear, or you need a decision only a person can take, ask one short question and stop. Never ask a
-  person for a password, a token or a key.
-- Laioutr commits what you changed and opens the pull request when your work ends; you do not commit.
+- When the task is unclear, or you need a decision only a person can take, ask one short question and stop. Ask it only
+  by calling the `ask_person` tool (`mcp__gate__ask_person`; load it with ToolSearch first if it is not listed yet): a
+  question written only in your reply reaches nobody, and the task ends without an answer. Never ask a person for a
+  password, a token or a key.
+- Laioutr commits what you changed when your work ends, and the change goes on for review from there; you do not commit.
 - When you are done, say in a few sentences what you changed and how a person checks it.
