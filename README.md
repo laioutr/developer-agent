@@ -15,7 +15,9 @@ collaborators; no secret is stored in GitHub.
    output and the time it was given). Afterwards every process of the agent is killed, and the patch is built from the
    job's own git directory over the agent's files, so nothing the agent wrote runs.
 3. `agent/run.mjs` runs Claude Code headless with the agent's context as its system prompt — sent by the Cockpit with
-   the task, from its kind in the Cockpit's registry — and the rules as allowed tools; anything else goes to `agent/gate.mjs`,
+   the task, from its kind in the Cockpit's registry — and the rules as allowed tools, with every hook of the checked-out
+   repository turned off (`agent/claudeArgs.ts`: in print mode Claude Code ignores an untrusted workspace's permissions
+   but still runs its hooks, and the repository is the client's to write); anything else goes to `agent/gate.mjs`,
    which denies it as waiting for a person and writes each refused command to the work's requests; the Cockpit asks a
    person to allow it, and an allowed command reaches the next work as a rule. `ask_person` ends the run; the answer
    starts the next one. The exchange step prints the names of what the run received, never a value, and where the model
@@ -23,6 +25,16 @@ collaborators; no secret is stored in GitHub.
 4. `agent/report.mjs` sends the patch and the events to the Cockpit, which checks the patch, commits it to
    `agent/<task>` through the App and opens a draft pull request. Nothing is pushed from the run and nothing is kept
    as an artifact.
+
+5. **A pre-release** is a work of its own, which the Cockpit starts after it committed a checked change. The exchange
+   answers the commit, the project's package, its `-agent.` version, where to register it and a publish key for that one
+   package at that version and a read-only key; both are written to files only the job's user reads, never to the
+   environment. A user of its own, in a folder under `/srv`, installs the commit with the read key alone and no script
+   or pnpmfile, then — the read key gone, in a network of its own with loopback alone (`unshare --net`) — rebuilds, runs
+   `dev:prepare`, `lint`, `test` and `test:types` where the project has them, sets the version and packs the package; its processes are killed until none is left,
+   the tarball is checked to be that package at that version, published with `--tag agent` (never `latest`), and
+   registered on the `testing` channel at the Cockpit. `agent/release.mjs` hands the outcome — published, or the step it
+   stopped at — to the gateway; the Cockpit asks the registry itself whether the version is there.
 
 A new version is tagged (`v1` moves) and its sha approved at the gateway (`AGENT_WORKFLOW_SHAS`) before runs may use it.
 `v1` is a lightweight tag: GitHub names an annotated tag's own object in the run's `job_workflow_sha`, not the commit,

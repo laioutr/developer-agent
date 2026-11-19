@@ -5,6 +5,11 @@
 # checks that it is this workflow at an approved version, in the run the Cockpit started, with its one-time nonce, and
 # only then hands over, for this run alone: the task, a read token for this one repository, and the model access.
 # Laioutr's Anthropic key never leaves the gateway. The change goes back through it, never pushed from here.
+#
+# A pre-release is a work of its own, after the Cockpit has checked and committed the agent's change: no agent, no model.
+# It installs and builds that commit as a user of its own holding no key that can publish — only a read key for the
+# install — then publishes the built package with a key for that one package at this run's version alone, and registers
+# it on the `testing` channel.
 name: Developer agent
 on:
   workflow_call:
@@ -30,6 +35,7 @@ jobs:
           set -euo pipefail
           command -v bwrap > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap > /dev/null; }
           npm i -g @anthropic-ai/claude-code@2.1.322 > /dev/null
+          sudo corepack enable
       - name: Get this run's keys from the gateway
         env:
           TASK_ID: ${{ inputs.task_id }}
@@ -47,8 +53,21 @@ jobs:
           unset oidc
           [[ "$status" != 000 ]] || { echo "The gateway could not be reached."; exit 1; }
           [[ "$status" == 200 ]] || { echo "The gateway refused this run's keys (HTTP $status)."; exit 1; }
-          for key in repositoryToken modelToken runToken; do echo "::add-mask::$(jq -r ".$key // empty" "$RUNNER_TEMP/run.json")"; done
+          for key in repositoryToken modelToken runToken publishToken installToken; do echo "::add-mask::$(jq -r ".$key // empty" "$RUNNER_TEMP/run.json")"; done
+          kind=$(jq -r '.kind // "change"' "$RUNNER_TEMP/run.json")
+          if [[ "$kind" == release ]]; then
+            # The keys never go into the environment: files only this job's user reads. The read key is handed to the
+            # install alone; the publish key never reaches a process that loaded the repository's code.
+            jq -r .publishToken "$RUNNER_TEMP/run.json" > "$RUNNER_TEMP/publish.key"
+            jq -r .installToken "$RUNNER_TEMP/run.json" > "$RUNNER_TEMP/install.key"
+            {
+              echo "PACKAGE_NAME=$(jq -r .packageName "$RUNNER_TEMP/run.json")"
+              echo "PACKAGE_VERSION=$(jq -r .version "$RUNNER_TEMP/run.json")"
+              echo "RELEASE_URL=$(jq -r .releaseUrl "$RUNNER_TEMP/run.json")"
+            } >> "$GITHUB_ENV"
+          fi
           {
+            echo "KIND=$kind"
             echo "REPOSITORY_TOKEN=$(jq -r .repositoryToken "$RUNNER_TEMP/run.json")"
             echo "RUN_TOKEN=$(jq -r .runToken "$RUNNER_TEMP/run.json")"
             echo "BASE=$(jq -r .base "$RUNNER_TEMP/run.json")"
@@ -59,7 +78,12 @@ jobs:
           } >> "$GITHUB_ENV"
           # Names only, never a value: anyone reading the log sees that no model credential reached the job.
           echo "Received for this run: $(jq -r 'keys_unsorted | join(", ")' "$RUNNER_TEMP/run.json")"
-          echo "The model is reached through $(jq -r .modelBaseUrl "$RUNNER_TEMP/run.json") with this run's own token."
+          if [[ "$kind" == release ]]; then
+            rm -f "$RUNNER_TEMP/run.json"
+            echo "A pre-release of $(grep -m1 '^PACKAGE_NAME=' "$GITHUB_ENV" | cut -d= -f2-), with no agent and no model."
+          else
+            echo "The model is reached through $(jq -r .modelBaseUrl "$RUNNER_TEMP/run.json") with this run's own token."
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository }}
@@ -80,6 +104,7 @@ jobs:
       # Nothing the agent wrote runs afterwards: its processes are killed, and the patch is built from this job's own git
       # directory over its files.
       - name: Run the agent
+        if: env.KIND != 'release'
         run: |
           # GitHub runs this with bash -e: every step of the set-up stops the job on its first failure.
           set -uo pipefail
@@ -160,6 +185,97 @@ jobs:
           sudo rm -rf "$box" "$GITHUB_WORKSPACE/work" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch"
           echo "The agent ended ($agent_status)."
           exit "$report_status"
+      # Everything that loads the repository's code — the install, the checks, the build — runs as a user of its own, in a
+      # folder outside the job's home, holding only a read key for the install; its processes are gone before the publish
+      # key is used. Only the built package is published, as the package and version the Cockpit named, under the `agent`
+      # tag alone, and registered on `testing`.
+      - name: Build and publish the pre-release
+        if: env.KIND == 'release'
+        env:
+          REGISTRY: https://npm.laioutr.cloud/
+        run: |
+          set -uo pipefail
+          umask 077
+          step=none
+          # Reported once, whichever shell fails first: a mark in a file, which a subshell's failure sets for its parent too.
+          reported="$RUNNER_TEMP/release.reported"
+          fail() {
+            [[ -e "$reported" ]] && exit 1
+            touch "$reported"
+            echo "The pre-release stopped at: $step."
+            node "$GITHUB_WORKSPACE/agent/agent/release.mjs" "$GATEWAY" failed "$step"
+            exit 1
+          }
+          trap fail ERR
+          # -E: a failure inside a function or subshell reaches the trap, so every failed step is reported.
+          set -eE
+          # Nothing of this job's files — the keys, the run's token in the environment files — is reachable by another user.
+          sudo chmod 700 "$RUNNER_TEMP" "$HOME"
+          sudo useradd --system --create-home --shell /usr/sbin/nologin builder
+          box=$(sudo mktemp -d /srv/release.XXXXXX) && sudo chmod 755 "$box"
+          work="$box/work"
+          sudo cp -a "$GITHUB_WORKSPACE/work" "$work"
+          sudo rm -rf "$GITHUB_WORKSPACE/work"
+          export COREPACK_HOME=/srv/corepack CI=true
+          sudo install -d -o builder -g builder -m 755 "$COREPACK_HOME"
+          builder_env=(env -i PATH="$PATH" HOME=/home/builder CI=true COREPACK_HOME="$COREPACK_HOME" COREPACK_ENV_FILE=0
+            NPM_CONFIG_USERCONFIG=/home/builder/.npmrc)
+          as_builder() { sudo -u builder "${builder_env[@]}" COREPACK_ENABLE_NETWORK=1 bash -c "cd '$work' && $1"; }
+          # The checks and the build run the repository's code: in a network of their own, loopback alone, so nothing it
+          # read — the installed packages, the project's code — leaves the machine.
+          as_builder_offline() {
+            sudo unshare --net -- sh -c 'ip link set lo up && exec "$@"' sh \
+              sudo -u builder "${builder_env[@]}" COREPACK_ENABLE_NETWORK=0 bash -c "cd '$work' && $1"
+          }
+          gone_builder() {
+            while pgrep -u builder > /dev/null; do sudo pkill -KILL -u builder || true; sleep 0.2; done
+          }
+
+          step=install
+          sudo chown -R builder:builder "$work"
+          as_builder 'corepack install' > /dev/null
+          printf '//npm.laioutr.cloud/:_authToken=%s\n@laioutr-core:registry=%s\n@laioutr-app:registry=%s\n@laioutr-store:registry=%s\n@laioutr-org:registry=%s\n' \
+            "$(cat "$RUNNER_TEMP/install.key")" "$REGISTRY" "$REGISTRY" "$REGISTRY" "$REGISTRY" | sudo -u builder tee /home/builder/.npmrc > /dev/null
+          rm -f "$RUNNER_TEMP/install.key"
+          as_builder 'pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.package-import-method=copy'
+          gone_builder
+          sudo rm -f /home/builder/.npmrc
+
+          step=checks
+          as_builder_offline 'pnpm rebuild && pnpm run --if-present dev:prepare && pnpm run --if-present lint && pnpm run --if-present test && pnpm run --if-present test:types'
+
+          step=build
+          as_builder_offline "npm pkg set version='$PACKAGE_VERSION' && mkdir -p .agent-pack && pnpm pack --pack-destination .agent-pack"
+          gone_builder
+
+          step=package
+          shopt -s nullglob
+          packed=("$work"/.agent-pack/*.tgz)
+          [[ ${#packed[@]} -eq 1 ]]
+          # A link could point the copy, made as root, at any file of the machine.
+          sudo test -f "${packed[0]}" && ! sudo test -L "${packed[0]}"
+          tarball="$RUNNER_TEMP/pre-release.tgz"
+          sudo cp -P "${packed[0]}" "$tarball" && sudo chown "$(id -u):$(id -g)" "$tarball"
+          sudo rm -rf "$box"
+          manifest=$(tar -xOzf "$tarball" package/package.json)
+          [[ "$(jq -r .name <<< "$manifest")" == "$PACKAGE_NAME" && "$(jq -r .version <<< "$manifest")" == "$PACKAGE_VERSION" ]]
+
+          step=publish
+          npmrc="$RUNNER_TEMP/npmrc"
+          printf '//npm.laioutr.cloud/:_authToken=%s\n' "$(cat "$RUNNER_TEMP/publish.key")" > "$npmrc"
+          (cd "$RUNNER_TEMP" && npm publish "$tarball" --tag agent --registry "$REGISTRY" --ignore-scripts --userconfig "$npmrc")
+          rm -f "$npmrc"
+
+          step=register
+          jq -n --arg name "$PACKAGE_NAME" --arg version "$PACKAGE_VERSION" '{packageName: $name, version: $version, channel: "testing"}' > "$RUNNER_TEMP/release.json"
+          printf 'Authorization: Bearer %s' "$(cat "$RUNNER_TEMP/publish.key")" | curl -sf -o /dev/null -X POST "$RELEASE_URL" \
+            -H @- -H "content-type: application/json" --data-binary @"$RUNNER_TEMP/release.json"
+
+          trap - ERR
+          rm -f "$RUNNER_TEMP/publish.key"
+          touch "$reported"
+          echo "Published $PACKAGE_NAME@$PACKAGE_VERSION on testing."
+          node "$GITHUB_WORKSPACE/agent/agent/release.mjs" "$GATEWAY" published none
       # However the job ends — cancelled, timed out, failed — nothing of the run stays on the machine.
       - name: Clean up
         if: always()
@@ -167,4 +283,7 @@ jobs:
           sudo pkill -KILL -u agent 2> /dev/null || true
           sudo pkill -KILL -u agentmodel 2> /dev/null || true
           sudo pkill -f agent/agent/progress.mjs 2> /dev/null || true
-          sudo rm -rf "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch" /srv/agent.* "$GITHUB_WORKSPACE/work"
+          sudo pkill -KILL -u builder 2> /dev/null || true
+          sudo rm -rf "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/work.git" "$RUNNER_TEMP/agent.patch" /srv/agent.* /srv/release.* "$GITHUB_WORKSPACE/work" \
+            "$RUNNER_TEMP/publish.key" "$RUNNER_TEMP/install.key" "$RUNNER_TEMP/npmrc" "$RUNNER_TEMP/pre-release.tgz" \
+            "$RUNNER_TEMP/release.json" /home/builder/.npmrc
