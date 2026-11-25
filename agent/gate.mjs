@@ -7,6 +7,8 @@ import readline from "node:readline";
 import { commandAllowed, refusalOf } from "./commandRules.ts";
 import { PERSON_TOOLS, recordedOf } from "./personTools.ts";
 const log = (o) => fs.appendFileSync(`${process.env.RUNNER_TEMP || "/tmp"  }/agent-requests.jsonl`, `${JSON.stringify(o)  }\n`);
+// A design task changes Studio alone: every prompt for a tool its rules did not name is refused, not only commands.
+const design = process.argv.includes("--design");
 const rl = readline.createInterface({ input: process.stdin });
 const send = (m) => process.stdout.write(`${JSON.stringify(m)  }\n`);
 /** The gate's answer to one message of Claude Code, or null for a notification, which gets none. */
@@ -25,9 +27,10 @@ const answerOf = (m) => {
       const { tool_name, input } = m.params.arguments;
       const cmd = input && input.command ? String(input.command) : "";
       // Claude Code applies the run's own rules before asking; the gate answers by the commands every work may run.
-      const allow = tool_name !== "Bash" || commandAllowed(cmd, []);
+      const allow = !design && (tool_name !== "Bash" || commandAllowed(cmd, []));
       log({ tool: m.params.name, args: m.params.arguments, denied: !allow });
-      const answer = allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: refusalOf(cmd) };
+      const refusal = design ? "A design task uses the studio tools alone." : refusalOf(cmd);
+      const answer = allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: refusal };
       return { content: [{ type: "text", text: JSON.stringify(answer) }] };
     }
     const recorded = recordedOf(m.params.name);

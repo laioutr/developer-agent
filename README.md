@@ -12,8 +12,12 @@ collaborators; no secret is stored in GitHub.
    files, no credential. The run's token for the gateway — Laioutr's key and seat never leave the gateway — stays with
    `agent/proxy.mjs`, run outside the sandbox as another user, which passes on only `/v1/messages` and `count_tokens`
    with the rules of `agent/modelRules.ts` (the gateway's own: the run's models, no server tools or MCP servers, the
-   output and the time it was given). Afterwards every process of the agent is killed, and the patch is built from the
-   job's own git directory over the agent's files, so nothing the agent wrote runs.
+   output and the time it was given). For a run the gateway says has a Studio bridge (`studio: true` at the exchange) it
+   also passes the agent's MCP messages to the gateway's `/studio/mcp` with the run's token (`agent/studioRules.ts`:
+   POST only, JSON within 1 MB, the transport's headers alone, no redirect followed, within the run's time); Claude Code
+   reaches it as the HTTP MCP server `studio` at the sandbox's own forwarder, and the run's Studio key never reaches the
+   job. Afterwards every process of the agent is killed, and the patch is built from the job's own git directory over
+   the agent's files, so nothing the agent wrote runs.
 3. `agent/run.mjs` runs Claude Code headless with the agent's context as its system prompt — sent by the Cockpit with
    the task, from its kind in the Cockpit's registry — and the rules as allowed tools, with every hook of the checked-out
    repository turned off (`agent/claudeArgs.ts`: in print mode Claude Code ignores an untrusted workspace's permissions

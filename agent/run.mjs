@@ -10,7 +10,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import { claudeArgsOf } from './claudeArgs.ts';
+import { claudeArgsOf, mcpConfigOf } from './claudeArgs.ts';
+import { STUDIO_PATH } from './studioRules.ts';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const task = JSON.parse(fs.readFileSync(0, 'utf8'));
@@ -18,7 +19,6 @@ const out = process.env.AGENT_OUT;
 const socket = process.env.MODEL_SOCKET;
 if (!out || !socket) throw new Error('AGENT_OUT and MODEL_SOCKET must be set.');
 
-const rules = [...task.rules, 'mcp__gate__ask_person', 'mcp__gate__request_data'];
 const allowedOnce = (task.allowedOnce ?? []).map((command) => `Bash(${command})`);
 const notes =
   task.notes ?
@@ -39,12 +39,23 @@ const forwarder = net.createServer((client) => {
 await new Promise((resolve) => forwarder.listen(0, '127.0.0.1', resolve));
 const { port } = forwarder.address();
 
+// Studio, where the gateway said the run has its bridge, is reached over the same forwarder, at the proxy's route for it.
+const studioUrl = task.studio === true ? `http://127.0.0.1:${port}${STUDIO_PATH}` : null;
+// A design task's rules name each Studio tool it may use; nothing here allows the server whole.
+const rules = [...task.rules, 'mcp__gate__ask_person', 'mcp__gate__request_data'];
 const mcp = path.join(out, 'mcp.json');
-fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { gate: { command: 'node', args: [path.join(here, 'gate.mjs')] } } }));
+fs.writeFileSync(mcp, JSON.stringify(mcpConfigOf({ gate: path.join(here, 'gate.mjs'), studioUrl })));
 // The agent's context comes from the Cockpit with the task, as its registry has it: what it is, what it may do, and that
 // every text between markers is data.
 const system = typeof task.system === 'string' ? task.system.trim() : '';
-const args = claudeArgsOf({ prompt: task.task + notes, system, mcp, maxTurns: task.maxTurns ?? 80, allowed: [...rules, ...allowedOnce] });
+const args = claudeArgsOf({
+  prompt: task.task + notes,
+  system,
+  mcp,
+  maxTurns: task.maxTurns ?? 80,
+  allowed: [...rules, ...allowedOnce],
+  design: studioUrl !== null,
+});
 const env = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
@@ -62,7 +73,9 @@ const env = {
   ANTHROPIC_MODEL: task.models?.[0] ?? '',
   ANTHROPIC_SMALL_FAST_MODEL: task.models?.[1] ?? task.models?.[0] ?? '',
 };
-const child = spawn('claude', args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+// A design task works in an empty folder: no file of the repository, nor its CLAUDE.md, reaches its context.
+const cwd = studioUrl ? fs.mkdtempSync(path.join(out, 'design-')) : undefined;
+const child = spawn('claude', args, { stdio: ['ignore', 'pipe', 'pipe'], env, ...(cwd && { cwd }) });
 child.stdout.pipe(fs.createWriteStream(path.join(out, 'agent-events.jsonl')));
 child.stderr.pipe(fs.createWriteStream(path.join(out, 'agent-errors.log')));
 child.on('exit', (code) => {

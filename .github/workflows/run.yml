@@ -129,10 +129,12 @@ jobs:
           sudo install -d -o agentmodel -g agent -m 2750 "$box/model"
 
           # The proxy gets the credential on a pipe; the keys' file is gone before the agent starts.
-          proxy_config=$(jq --arg socket "$box/model/model.sock" '{
+          # Studio's route is the gateway's own, fixed here; the gateway alone holds the run's Studio key.
+          proxy_config=$(jq --arg socket "$box/model/model.sock" --arg studio "$GATEWAY/studio/mcp" '{
             socket: $socket, upstream: .modelBaseUrl, token: .modelToken, models, maxOutputTokens, deadline,
-            maxCalls: ((.maxTurns // 80) * 5) }' "$run")
-          task=$(jq '{task, system, rules, models, notes, allowedOnce, maxTurns}' "$run")
+            maxCalls: ((.maxTurns // 80) * 5),
+            studio: (.studio == true), studioUpstream: $studio, maxStudioCalls: ((.maxTurns // 80) * 10) }' "$run")
+          task=$(jq '{task, system, rules, models, notes, allowedOnce, maxTurns, studio: (.studio == true)}' "$run")
           rm -f "$run"
           (printf '%s' "$proxy_config" | sudo -u agentmodel "$node_dir/bin/node" "$box/scripts/proxy.mjs" &)
           unset proxy_config
